@@ -1,0 +1,52 @@
+name: Build gRPC PHP (PECL ARM64)
+
+# Mengizinkan eksekusi manual
+on:
+  workflow_dispatch:
+    inputs:
+      grpc_version:
+        description: 'Versi gRPC di PECL (contoh: 1.80.0RC1)'
+        required: true
+        default: '1.80.0RC1'
+      php_version:
+        description: 'Versi PHP (contoh: 8.3)'
+        required: true
+        default: '8.3'
+
+jobs:
+  build-pecl-arm:
+    # Menggunakan server fisik ARM64 dari GitHub (Super Cepat)
+    runs-on: ubuntu-24.04-arm 
+
+    steps:
+      - name: 1. Install Dependensi Sistem
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common curl build-essential zlib1g-dev
+
+      - name: 2. Setup PPA Ondřej & Install PHP + PEAR (PECL)
+        run: |
+          sudo add-apt-repository -y ppa:ondrej/php
+          sudo apt-get update
+          # php-pear wajib diinstall agar perintah 'pecl' tersedia
+          sudo apt-get install -y php${{ github.event.inputs.php_version }}-dev php${{ github.event.inputs.php_version }}-cli php-pear
+
+      - name: 3. Install gRPC via PECL (Proses Build)
+        # PECL akan mengunduh source, menjalankan phpize, configure, dan make otomatis
+        run: |
+          sudo pecl install grpc-${{ github.event.inputs.grpc_version }}
+
+      - name: 4. Ambil File grpc.so
+        run: |
+          # Bertanya ke PHP di mana PECL meletakkan hasil build-nya
+          EXT_DIR=$(php-config --extension-dir)
+          echo "File grpc.so berhasil dibuat di: $EXT_DIR"
+          
+          # Pindahkan file tersebut ke folder kerja utama agar bisa didownload
+          cp $EXT_DIR/grpc.so ./grpc.so
+
+      - name: 5. Upload grpc.so sebagai Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grpc-arm64-pecl-php${{ github.event.inputs.php_version }}-v${{ github.event.inputs.grpc_version }}
+          path: ./grpc.so
