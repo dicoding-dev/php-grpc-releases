@@ -1,6 +1,6 @@
-name: Build gRPC PHP (PECL Multi-Arch)
+name: Build gRPC PHP (Ubuntu 22.04 Multi-Arch)
 
-# Mengizinkan eksekusi manual
+# Pemicu manual agar Anda bisa memasukkan versi saat menjalankan workflow
 on:
   workflow_dispatch:
     inputs:
@@ -15,45 +15,45 @@ on:
 
 jobs:
   build-pecl:
+    name: Build on ${{ matrix.arch }}
     strategy:
-      # Matrix akan menjalankan job ini berulang kali sesuai daftar di bawah
+      # Matrix untuk menjalankan dua server berbeda secara bersamaan
       matrix:
         include:
-          # 1. Target untuk PC Lokal Anda (Intel/AMD64)
           - os: ubuntu-22.04
             arch: amd64
-          # 2. Target untuk Server VPS Anda (Native ARM64)
           - os: ubuntu-22.04-arm
             arch: arm64
 
-    # Server yang digunakan akan menyesuaikan dengan matrix di atas
+    # GitHub akan memilih OS runner berdasarkan matrix di atas
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: 1. Install Dependensi Sistem
+      - name: 1. Update Sistem & Install Dependensi Dasar
         run: |
           sudo apt-get update
           sudo apt-get install -y software-properties-common curl build-essential zlib1g-dev
 
-      - name: 2. Setup PPA Ondřej & Install PHP + PEAR (PECL)
+      - name: 2. Tambahkan PPA Ondřej & Install PHP + PEAR
         run: |
           sudo add-apt-repository -y ppa:ondrej/php
           sudo apt-get update
           sudo apt-get install -y php${{ github.event.inputs.php_version }}-dev php${{ github.event.inputs.php_version }}-cli php-pear
 
-      - name: 3. Install gRPC via PECL
+      - name: 3. Compile gRPC via PECL
         run: |
           sudo pecl install grpc-${{ github.event.inputs.grpc_version }}
 
       - name: 4. Ambil File grpc.so
         run: |
           EXT_DIR=$(php-config --extension-dir)
-          echo "File grpc.so berhasil dibuat di: $EXT_DIR"
+          echo "File grpc.so berhasil dibuat di direktori: $EXT_DIR"
+          # Salin file ke root workspace agar mudah diupload
           cp $EXT_DIR/grpc.so ./grpc.so
 
-      - name: 5. Upload grpc.so sebagai Artifact
+      - name: 5. Upload File grpc.so sebagai Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Nama file zip akan otomatis dibedakan (amd64 vs arm64) agar tidak tertimpa
-          name: grpc-${{ matrix.arch }}-php${{ github.event.inputs.php_version }}-v${{ github.event.inputs.grpc_version }}
+          # Nama file .zip akan dibedakan secara otomatis berdasarkan arsitektur
+          name: grpc-${{ matrix.arch }}-ubuntu22.04-php${{ github.event.inputs.php_version }}-v${{ github.event.inputs.grpc_version }}
           path: ./grpc.so
