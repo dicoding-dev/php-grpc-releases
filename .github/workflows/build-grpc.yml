@@ -1,6 +1,5 @@
 name: Build gRPC PHP (Ubuntu 22.04 Multi-Arch)
 
-# Pemicu manual agar Anda bisa memasukkan versi saat menjalankan workflow
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +16,6 @@ jobs:
   build-pecl:
     name: Build on ${{ matrix.arch }}
     strategy:
-      # Matrix untuk menjalankan dua server berbeda secara bersamaan
       matrix:
         include:
           - os: ubuntu-22.04
@@ -25,7 +23,6 @@ jobs:
           - os: ubuntu-22.04-arm
             arch: arm64
 
-    # GitHub akan memilih OS runner berdasarkan matrix di atas
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -34,11 +31,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y software-properties-common curl build-essential zlib1g-dev
 
-      - name: 2. Tambahkan PPA Ondřej & Install PHP + PEAR
+      - name: 2. Tambahkan PPA Ondřej & Install PHP + PEAR + XML
+        # Kunci perbaikannya ada di baris paling bawah ini (menambahkan paket php-xml)
         run: |
           sudo add-apt-repository -y ppa:ondrej/php
           sudo apt-get update
-          sudo apt-get install -y php${{ github.event.inputs.php_version }}-dev php${{ github.event.inputs.php_version }}-cli php-pear
+          sudo apt-get install -y php${{ github.event.inputs.php_version }}-dev php${{ github.event.inputs.php_version }}-cli php-pear php${{ github.event.inputs.php_version }}-xml
 
       - name: 3. Compile gRPC via PECL
         run: |
@@ -48,12 +46,10 @@ jobs:
         run: |
           EXT_DIR=$(php-config --extension-dir)
           echo "File grpc.so berhasil dibuat di direktori: $EXT_DIR"
-          # Salin file ke root workspace agar mudah diupload
           cp $EXT_DIR/grpc.so ./grpc.so
 
       - name: 5. Upload File grpc.so sebagai Artifact
         uses: actions/upload-artifact@v4
         with:
-          # Nama file .zip akan dibedakan secara otomatis berdasarkan arsitektur
           name: grpc-${{ matrix.arch }}-ubuntu22.04-php${{ github.event.inputs.php_version }}-v${{ github.event.inputs.grpc_version }}
           path: ./grpc.so
