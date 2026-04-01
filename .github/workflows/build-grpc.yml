@@ -29,7 +29,7 @@ jobs:
       - name: 1. Update Sistem & Install Dependensi Dasar
         run: |
           sudo apt-get update
-          sudo apt-get install -y software-properties-common curl build-essential zlib1g-dev
+          sudo apt-get install -y software-properties-common curl build-essential zlib1g-dev binutils
 
       - name: 2. Tambahkan PPA Ondřej & Install PHP + PEAR + XML
         # Kunci perbaikannya ada di baris paling bawah ini (menambahkan paket php-xml)
@@ -42,11 +42,11 @@ jobs:
         run: |
           sudo pecl install grpc-${{ github.event.inputs.grpc_version }}
 
-      - name: 4. Ambil File grpc.so
+      - name: 4. Ambil dan strip File grpc.so
         run: |
           EXT_DIR=$(php-config --extension-dir)
           echo "File grpc.so berhasil dibuat di direktori: $EXT_DIR"
-          cp $EXT_DIR/grpc.so ./grpc.so
+          strip --strip-debug -o ./grpc.so $EXT_DIR/grpc.so
 
       - name: 5. Upload File grpc.so sebagai Artifact
         uses: actions/upload-artifact@v4
