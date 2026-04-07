@@ -134,30 +134,35 @@ jobs:
 
           echo "Creating release: $RELEASE_TAG"
 
-          # Create release dengan artifacts
-          gh release create "$RELEASE_TAG" \
-            --title "$RELEASE_NAME" \
-            --notes "Pre-compiled gRPC extension for PHP ${PHP_VERSION}
+          # Create release notes file
+          cat > /tmp/release_notes.txt << 'NOTES'
+Pre-compiled gRPC extension for PHP ${PHP_VERSION}
 
 gRPC Version: ${GRPC_VERSION}
 PHP Version: ${PHP_VERSION}
 Built on: Ubuntu 22.04
 Architectures: AMD64, ARM64
 
-Usage in Dockerfile:
+## Usage in Dockerfile:
 
 FROM php:${PHP_VERSION}-fpm
 
-RUN curl -L -o /tmp/grpc.so \\
-  https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so && \\
-  mv /tmp/grpc.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/grpc.so && \\
-  docker-php-ext-enable grpc && \\
+RUN curl -L -o /tmp/grpc.so \
+  https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so && \
+  mv /tmp/grpc.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/grpc.so && \
+  docker-php-ext-enable grpc && \
   rm -rf /tmp/*
 
-Available Downloads:
+## Available Downloads:
+
 - grpc-amd64.so: https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so
 - grpc-arm64.so: https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-arm64.so
-" \
+NOTES
+
+          # Create release dengan artifacts
+          gh release create "$RELEASE_TAG" \
+            --title "$RELEASE_NAME" \
+            --notes-file /tmp/release_notes.txt \
             artifacts/grpc-amd64.so \
             artifacts/grpc-arm64.so
 
