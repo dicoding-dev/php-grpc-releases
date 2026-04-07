@@ -1,153 +1,194 @@
 name: Publish gRPC to GitHub Releases
 
 on:
+  # ✅ Trigger otomatis setelah build-grpc.yml selesai
+  workflow_run:
+    workflows: ["Build gRPC PHP (Ubuntu 22.04 Multi-Arch)"]
+    types: [completed]
+    branches: [main]
+
+  # Manual trigger untuk publish dengan versi spesifik
   workflow_dispatch:
     inputs:
-      grpc_version:
-        description: 'gRPC Version (e.g., 1.80.0RC1, 1.80.0)'
-        required: true
-        default: '1.80.0'
-      php_version:
-        description: 'PHP Version (e.g., 8.3)'
-        required: true
-        default: '8.3'
-      source_run_id:
-        description: 'GitHub Actions Run ID dari php-grpc-1.8RC (opsional, otomatis jika kosong)'
+      run_id:
+        description: 'Run ID dari workflow build-grpc (kosongkan untuk auto-detect yang terbaru)'
         required: false
 
 jobs:
   publish-release:
     name: Publish to GitHub Releases
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Find Build Artifacts
-        id: find-artifacts
+      - name: Get Build Run ID
+        id: get-run-id
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GRPC_VERSION: ${{ github.event.inputs.grpc_version }}
-          PHP_VERSION: ${{ github.event.inputs.php_version }}
-          RUN_ID: ${{ github.event.inputs.source_run_id }}
         run: |
-          # Jika run_id tidak diberikan, cari yang terbaru dengan grpc_version dan php_version
+          # Gunakan run_id dari input jika ada, atau ambil dari workflow_run trigger
+          RUN_ID="${{ github.event.inputs.run_id }}"
+
           if [ -z "$RUN_ID" ]; then
-            echo "Searching for latest build artifacts..."
-            RUN_ID=$(gh run list \
-              --repo agissept/php-grpc-1.8RC \
-              --workflow build-grpc.yml \
-              --status success \
-              --json databaseId,headBranch \
-              --jq ".[] | select(.headBranch == \"main\" or .headBranch == \"master\") | .databaseId" \
-              | head -1)
-            
-            if [ -z "$RUN_ID" ]; then
-              echo "❌ No successful build found. Please provide source_run_id manually."
-              exit 1
+            # Jika dari workflow_run trigger
+            if [ "${{ github.event_name }}" = "workflow_run" ]; then
+              RUN_ID="${{ github.event.workflow_run.id }}"
+            else
+              # Cari run yang paling baru dan berhasil
+              echo "🔍 Searching for latest successful build..."
+              RUN_ID=$(gh run list \
+                --workflow build-grpc.yml \
+                --status success \
+                --json databaseId \
+                --jq ".[0].databaseId")
+
+              if [ -z "$RUN_ID" ]; then
+                echo "❌ No successful build found!"
+                exit 1
+              fi
             fi
           fi
-          
-          echo "Using Run ID: $RUN_ID"
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
 
-      - name: Download Artifacts from php-grpc-1.8RC
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "✅ Using Run ID: $RUN_ID"
+
+      - name: Download Artifacts
         id: download
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_ID: ${{ steps.find-artifacts.outputs.run_id }}
-          PHP_VERSION: ${{ github.event.inputs.php_version }}
-          GRPC_VERSION: ${{ github.event.inputs.grpc_version }}
+          RUN_ID: ${{ steps.get-run-id.outputs.run_id }}
         run: |
           mkdir -p artifacts
-          
-          # Download artifacts from the build repo
-          gh run download $RUN_ID \
-            --repo agissept/php-grpc-1.8RC \
-            --dir artifacts \
-            --pattern "*php${PHP_VERSION}*"
-          
+
+          # Download semua artifacts dari build-grpc run
+          echo "📥 Downloading artifacts from run $RUN_ID..."
+          gh run download "$RUN_ID" --dir artifacts
+
           # List downloaded files
-          echo "Downloaded files:"
-          find artifacts -type f -name "grpc.so"
-          
-          # Rename files for clarity
-          echo "Renaming files..."
-          find artifacts -name "grpc.so" | while read file; do
-            dirname=$(dirname "$file")
-            
-            # Extract arch from directory name
-            if [[ "$dirname" == *"amd64"* ]]; then
-              mv "$file" "artifacts/grpc-amd64.so"
-            elif [[ "$dirname" == *"arm64"* ]]; then
-              mv "$file" "artifacts/grpc-arm64.so"
+          echo "📦 Downloaded files:"
+          find artifacts -type f -name "grpc.so" | head -20
+
+      - name: Extract Version & Organize Artifacts
+        id: versions
+        run: |
+          # Ambil artifact directory pertama untuk extract versi
+          ARTIFACT_DIR=$(find artifacts -type d -name "*grpc*" | head -1)
+
+          if [ -z "$ARTIFACT_DIR" ]; then
+            echo "❌ No artifact directory found!"
+            ls -la artifacts/
+            exit 1
+          fi
+
+          echo "📂 Using artifact dir: $ARTIFACT_DIR"
+
+          # Parse nama: grpc-{arch}-ubuntu22.04-php{php_version}-v{grpc_version}
+          # Contoh: grpc-amd64-ubuntu22.04-php8.3-v1.80.0RC1
+          BASENAME=$(basename "$ARTIFACT_DIR")
+
+          # Extract versions menggunakan regex
+          if [[ $BASENAME =~ php([0-9.]+)-v(.+)$ ]]; then
+            PHP_VERSION="${BASH_REMATCH[1]}"
+            GRPC_VERSION="${BASH_REMATCH[2]}"
+          else
+            echo "❌ Could not parse artifact name: $BASENAME"
+            exit 1
+          fi
+
+          echo "PHP_VERSION=$PHP_VERSION" >> $GITHUB_OUTPUT
+          echo "GRPC_VERSION=$GRPC_VERSION" >> $GITHUB_OUTPUT
+
+          echo "✅ Extracted versions:"
+          echo "   gRPC: $GRPC_VERSION"
+          echo "   PHP: $PHP_VERSION"
+
+          # Organize files ke artifacts root
+          echo "📝 Organizing artifacts..."
+          for arch_dir in artifacts/grpc-*-ubuntu*; do
+            if [ -d "$arch_dir" ]; then
+              if [[ $(basename "$arch_dir") == *"amd64"* ]]; then
+                cp "$arch_dir/grpc.so" artifacts/grpc-amd64.so
+                echo "  ✓ grpc-amd64.so"
+              elif [[ $(basename "$arch_dir") == *"arm64"* ]]; then
+                cp "$arch_dir/grpc.so" artifacts/grpc-arm64.so
+                echo "  ✓ grpc-arm64.so"
+              fi
             fi
           done
-          
-          echo "Final artifacts:"
-          ls -lh artifacts/
 
       - name: Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GRPC_VERSION: ${{ github.event.inputs.grpc_version }}
-          PHP_VERSION: ${{ github.event.inputs.php_version }}
+          GRPC_VERSION: ${{ steps.versions.outputs.GRPC_VERSION }}
+          PHP_VERSION: ${{ steps.versions.outputs.PHP_VERSION }}
         run: |
           RELEASE_TAG="v${GRPC_VERSION}-php${PHP_VERSION}"
           RELEASE_NAME="gRPC ${GRPC_VERSION} for PHP ${PHP_VERSION}"
-          
-          # Create release with assets
+
+          # Check if release sudah ada
+          if gh release view "$RELEASE_TAG" &>/dev/null; then
+            echo "⚠️  Release $RELEASE_TAG already exists, skipping..."
+            exit 0
+          fi
+
+          echo "🚀 Creating release: $RELEASE_TAG"
+
+          # Create release dengan artifacts
           gh release create "$RELEASE_TAG" \
             --title "$RELEASE_NAME" \
             --notes "Pre-compiled gRPC extension for PHP ${PHP_VERSION}
-            
+
 **gRPC Version:** ${GRPC_VERSION}
 **PHP Version:** ${PHP_VERSION}
 **Built on:** Ubuntu 22.04
 **Architectures:** AMD64, ARM64
 
-## Usage in Dockerfile
+## 📥 Usage in Dockerfile
 
 \`\`\`dockerfile
 # Download and install gRPC
-RUN curl -L -o /tmp/grpc-amd64.so \\
+RUN curl -L -o /tmp/grpc.so \\
   https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so && \\
-  mv /tmp/grpc-amd64.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/grpc.so && \\
+  mv /tmp/grpc.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/grpc.so && \\
   docker-php-ext-enable grpc
 \`\`\`
 
-**Artifacts:**
-- \`grpc-amd64.so\` - AMD64 (x86_64) architecture
-- \`grpc-arm64.so\` - ARM64 architecture
+## 📦 Available Downloads
+
+- **AMD64**: \`grpc-amd64.so\` - x86_64 architecture
+- **ARM64**: \`grpc-arm64.so\` - ARM 64-bit architecture
+
+## 📝 Download URLs
+
+- AMD64: \`https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so\`
+- ARM64: \`https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-arm64.so\`
 " \
             artifacts/grpc-amd64.so \
             artifacts/grpc-arm64.so
-          
+
           echo "✅ Release $RELEASE_TAG created successfully!"
 
-      - name: Print Release Info
+      - name: Print Release Summary
         env:
-          GRPC_VERSION: ${{ github.event.inputs.grpc_version }}
-          PHP_VERSION: ${{ github.event.inputs.php_version }}
+          GRPC_VERSION: ${{ steps.versions.outputs.GRPC_VERSION }}
+          PHP_VERSION: ${{ steps.versions.outputs.PHP_VERSION }}
         run: |
           RELEASE_TAG="v${GRPC_VERSION}-php${PHP_VERSION}"
-          
+
+          echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "✅ Release Published Successfully!"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo ""
-          echo "Release Tag: $RELEASE_TAG"
-          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+          echo "📦 Release Tag: $RELEASE_TAG"
+          echo "🔗 Release URL:"
+          echo "   https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
           echo ""
-          echo "Download URLs:"
-          echo "  AMD64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-amd64.so"
-          echo "  ARM64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-arm64.so"
-          echo ""
-          echo "Dockerfile Usage:"
-          echo "  RUN curl -L -o /tmp/grpc.so \\"
-          echo "    https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-amd64.so && \\"
-          echo "    mv /tmp/grpc.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/ && \\"
-          echo "    docker-php-ext-enable grpc"
+          echo "📥 Download URLs:"
+          echo "   AMD64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-amd64.so"
+          echo "   ARM64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-arm64.so"
           echo ""
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
