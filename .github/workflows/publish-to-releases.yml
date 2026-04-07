@@ -1,23 +1,23 @@
 name: Publish gRPC to GitHub Releases
 
 on:
-  # ✅ Trigger otomatis setelah build-grpc.yml selesai
+  # Auto-trigger setelah build-grpc.yml selesai
   workflow_run:
     workflows: ["Build gRPC PHP (Ubuntu 22.04 Multi-Arch)"]
     types: [completed]
-    branches: [main]
 
-  # Manual trigger untuk publish dengan versi spesifik
+  # Manual trigger untuk publish
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'Run ID dari workflow build-grpc (kosongkan untuk auto-detect yang terbaru)'
+        description: 'Run ID dari workflow build-grpc (kosongkan untuk auto-detect)'
         required: false
 
 jobs:
   publish-release:
     name: Publish to GitHub Releases
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout code
@@ -37,7 +37,7 @@ jobs:
               RUN_ID="${{ github.event.workflow_run.id }}"
             else
               # Cari run yang paling baru dan berhasil
-              echo "🔍 Searching for latest successful build..."
+              echo "Searching for latest successful build..."
               RUN_ID=$(gh run list \
                 --workflow build-grpc.yml \
                 --status success \
@@ -45,14 +45,14 @@ jobs:
                 --jq ".[0].databaseId")
 
               if [ -z "$RUN_ID" ]; then
-                echo "❌ No successful build found!"
+                echo "ERROR: No successful build found!"
                 exit 1
               fi
             fi
           fi
 
+          echo "Using Run ID: $RUN_ID"
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
-          echo "✅ Using Run ID: $RUN_ID"
 
       - name: Download Artifacts
         id: download
@@ -63,29 +63,28 @@ jobs:
           mkdir -p artifacts
 
           # Download semua artifacts dari build-grpc run
-          echo "📥 Downloading artifacts from run $RUN_ID..."
+          echo "Downloading artifacts from run $RUN_ID..."
           gh run download "$RUN_ID" --dir artifacts
 
           # List downloaded files
-          echo "📦 Downloaded files:"
+          echo "Downloaded files:"
           find artifacts -type f -name "grpc.so" | head -20
 
-      - name: Extract Version & Organize Artifacts
+      - name: Extract Version and Organize Artifacts
         id: versions
         run: |
           # Ambil artifact directory pertama untuk extract versi
           ARTIFACT_DIR=$(find artifacts -type d -name "*grpc*" | head -1)
 
           if [ -z "$ARTIFACT_DIR" ]; then
-            echo "❌ No artifact directory found!"
+            echo "ERROR: No artifact directory found!"
             ls -la artifacts/
             exit 1
           fi
 
-          echo "📂 Using artifact dir: $ARTIFACT_DIR"
+          echo "Using artifact dir: $ARTIFACT_DIR"
 
           # Parse nama: grpc-{arch}-ubuntu22.04-php{php_version}-v{grpc_version}
-          # Contoh: grpc-amd64-ubuntu22.04-php8.3-v1.80.0RC1
           BASENAME=$(basename "$ARTIFACT_DIR")
 
           # Extract versions menggunakan regex
@@ -93,27 +92,27 @@ jobs:
             PHP_VERSION="${BASH_REMATCH[1]}"
             GRPC_VERSION="${BASH_REMATCH[2]}"
           else
-            echo "❌ Could not parse artifact name: $BASENAME"
+            echo "ERROR: Could not parse artifact name: $BASENAME"
             exit 1
           fi
 
           echo "PHP_VERSION=$PHP_VERSION" >> $GITHUB_OUTPUT
           echo "GRPC_VERSION=$GRPC_VERSION" >> $GITHUB_OUTPUT
 
-          echo "✅ Extracted versions:"
-          echo "   gRPC: $GRPC_VERSION"
-          echo "   PHP: $PHP_VERSION"
+          echo "Extracted versions:"
+          echo "  gRPC: $GRPC_VERSION"
+          echo "  PHP: $PHP_VERSION"
 
           # Organize files ke artifacts root
-          echo "📝 Organizing artifacts..."
+          echo "Organizing artifacts..."
           for arch_dir in artifacts/grpc-*-ubuntu*; do
             if [ -d "$arch_dir" ]; then
               if [[ $(basename "$arch_dir") == *"amd64"* ]]; then
                 cp "$arch_dir/grpc.so" artifacts/grpc-amd64.so
-                echo "  ✓ grpc-amd64.so"
+                echo "  Created: grpc-amd64.so"
               elif [[ $(basename "$arch_dir") == *"arm64"* ]]; then
                 cp "$arch_dir/grpc.so" artifacts/grpc-arm64.so
-                echo "  ✓ grpc-arm64.so"
+                echo "  Created: grpc-arm64.so"
               fi
             fi
           done
@@ -129,46 +128,40 @@ jobs:
 
           # Check if release sudah ada
           if gh release view "$RELEASE_TAG" &>/dev/null; then
-            echo "⚠️  Release $RELEASE_TAG already exists, skipping..."
+            echo "WARNING: Release $RELEASE_TAG already exists, skipping..."
             exit 0
           fi
 
-          echo "🚀 Creating release: $RELEASE_TAG"
+          echo "Creating release: $RELEASE_TAG"
 
           # Create release dengan artifacts
           gh release create "$RELEASE_TAG" \
             --title "$RELEASE_NAME" \
             --notes "Pre-compiled gRPC extension for PHP ${PHP_VERSION}
 
-**gRPC Version:** ${GRPC_VERSION}
-**PHP Version:** ${PHP_VERSION}
-**Built on:** Ubuntu 22.04
-**Architectures:** AMD64, ARM64
+gRPC Version: ${GRPC_VERSION}
+PHP Version: ${PHP_VERSION}
+Built on: Ubuntu 22.04
+Architectures: AMD64, ARM64
 
-## 📥 Usage in Dockerfile
+Usage in Dockerfile:
 
-\`\`\`dockerfile
-# Download and install gRPC
+FROM php:${PHP_VERSION}-fpm
+
 RUN curl -L -o /tmp/grpc.so \\
   https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so && \\
   mv /tmp/grpc.so /usr/local/lib/php/extensions/no-debug-non-zts-20220829/grpc.so && \\
-  docker-php-ext-enable grpc
-\`\`\`
+  docker-php-ext-enable grpc && \\
+  rm -rf /tmp/*
 
-## 📦 Available Downloads
-
-- **AMD64**: \`grpc-amd64.so\` - x86_64 architecture
-- **ARM64**: \`grpc-arm64.so\` - ARM 64-bit architecture
-
-## 📝 Download URLs
-
-- AMD64: \`https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so\`
-- ARM64: \`https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-arm64.so\`
+Available Downloads:
+- grpc-amd64.so: https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-amd64.so
+- grpc-arm64.so: https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/grpc-arm64.so
 " \
             artifacts/grpc-amd64.so \
             artifacts/grpc-arm64.so
 
-          echo "✅ Release $RELEASE_TAG created successfully!"
+          echo "Release $RELEASE_TAG created successfully!"
 
       - name: Print Release Summary
         env:
@@ -178,17 +171,16 @@ RUN curl -L -o /tmp/grpc.so \\
           RELEASE_TAG="v${GRPC_VERSION}-php${PHP_VERSION}"
 
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ Release Published Successfully!"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "========================================"
+          echo "Release Published Successfully!"
+          echo "========================================"
           echo ""
-          echo "📦 Release Tag: $RELEASE_TAG"
-          echo "🔗 Release URL:"
-          echo "   https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+          echo "Release Tag: $RELEASE_TAG"
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
           echo ""
-          echo "📥 Download URLs:"
-          echo "   AMD64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-amd64.so"
-          echo "   ARM64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-arm64.so"
+          echo "Download URLs:"
+          echo "  AMD64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-amd64.so"
+          echo "  ARM64: https://github.com/${{ github.repository }}/releases/download/$RELEASE_TAG/grpc-arm64.so"
           echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "========================================"
           echo ""
